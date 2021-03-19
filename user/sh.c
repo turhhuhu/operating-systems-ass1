@@ -3,7 +3,7 @@
 #include "kernel/types.h"
 #include "user/user.h"
 #include "kernel/fcntl.h"
-
+#include "ulib.c"
 // Parsed command representation
 #define EXEC  1
 #define REDIR 2
@@ -52,7 +52,8 @@ struct backcmd {
 int fork1(void);  // Fork but panics on failure.
 void panic(char*);
 struct cmd *parsecmd(char*);
-
+char* proxy_path(char*);
+int file_exists(const char*);
 // Execute cmd.  Never returns.
 void
 runcmd(struct cmd *cmd)
@@ -73,9 +74,10 @@ runcmd(struct cmd *cmd)
 
   case EXEC:
     ecmd = (struct execcmd*)cmd;
-    if(ecmd->argv[0] == 0)
+    if(ecmd->argv[0] == 0 || strlen(ecmd->argv[0]) <= 0)
       exit(1);
-    exec(ecmd->argv[0], ecmd->argv);
+    char* path = proxy_path(ecmd->argv[0]);
+    exec(path, ecmd->argv);
     fprintf(2, "exec %s failed\n", ecmd->argv[0]);
     break;
 
@@ -169,6 +171,25 @@ main(void)
     wait(0);
   }
   exit(0);
+}
+
+char* proxy_path(char* path)
+{
+  if (path[0] == '.' || path[0] == '/' || file_exists(path)){
+    return path;
+  }
+  int path_fd = open("/path", O_RDONLY | O_CREATE);
+  struct stat path_stat;
+  fstat(path_fd, &path_stat);
+  uint64 file_size = path_stat.size;
+}
+
+int file_exists(const char* filename){
+    int exist = stat(filename, 0);
+    if(exist == 0)
+        return 1;
+    else
+        return 0;
 }
 
 void
