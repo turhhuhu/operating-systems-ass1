@@ -97,6 +97,7 @@ extern uint64 sys_sbrk(void);
 extern uint64 sys_sleep(void);
 extern uint64 sys_unlink(void);
 extern uint64 sys_wait(void);
+extern uint64 sys_wait_stat(void);
 extern uint64 sys_write(void);
 extern uint64 sys_uptime(void);
 extern uint64 sys_trace(void);
@@ -123,7 +124,8 @@ static uint64 (*syscalls[])(void) = {
     [SYS_link] sys_link,
     [SYS_mkdir] sys_mkdir,
     [SYS_close] sys_close,
-    [SYS_trace] sys_trace
+    [SYS_trace] sys_trace,
+	[SYS_wait_stat] sys_wait_stat
 };
 
 static char* sys_names[] = {
@@ -148,7 +150,8 @@ static char* sys_names[] = {
     [SYS_link] "link",
     [SYS_mkdir] "mkdir",
     [SYS_close] "close",
-    [SYS_trace] "trace"
+    [SYS_trace] "trace",
+    [SYS_wait_stat] "wait_stat"
 };
 
 void print_trace(int pid, int sys_num, uint64 return_value, int first_arg)

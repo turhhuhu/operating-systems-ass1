@@ -2,21 +2,22 @@
 #include "kernel/stat.h"
 #include "user/user.h"
 #include "kernel/syscall.h"
-
+#include "kernel/perf.h"
 int main(int argc, char* argv[])
 {
     int f_pid = getpid();
-    trace(1 << SYS_fork | 1 << SYS_kill, f_pid);
 
     int pid;
     pid = fork();
     if(pid == 0){
         fprintf(2, "in child process\n");
+        sleep(10);
     }
     else{
         fprintf(2, "in father process with pid: %d\n", f_pid);
-        kill(pid);
-        wait(0);
+        struct perf perfomance;
+        wait_stat(0, &perfomance);
+        fprintf(2, "ttime, ctime, rettime, ruttime, stime: %d, %d, %d, %d, %d\n ", perfomance.ttime, perfomance.ctime, perfomance.retime, perfomance.rutime, perfomance.stime);
     }
 
     exit(0);

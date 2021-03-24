@@ -5,6 +5,8 @@
 #include "spinlock.h"
 #include "proc.h"
 #include "defs.h"
+#include "perf.h"
+
 
 struct cpu cpus[NCPU];
 
@@ -40,6 +42,15 @@ void proc_mapstacks(pagetable_t kpgtbl)
         uint64 va = KSTACK((int)(p - proc));
         kvmmap(kpgtbl, va, (uint64)pa, PGSIZE, PTE_R | PTE_W);
     }
+}
+
+uint get_ticks()
+{
+    acquire(&tickslock);
+    int curr_ticks = ticks;
+	printf("curr_ticks: %d\n", curr_ticks);
+    release(&tickslock);
+    return curr_ticks;
 }
 
 // initialize the proc table at boot time.
@@ -119,7 +130,6 @@ allocproc(void)
 found:
     p->pid = allocpid();
     p->state = USED;
-	p->tracemask = 0;
     // Allocate a trapframe page.
     if ((p->trapframe = (struct trapframe*)kalloc()) == 0) {
         freeproc(p);
@@ -140,7 +150,7 @@ found:
     memset(&p->context, 0, sizeof(p->context));
     p->context.ra = (uint64)forkret;
     p->context.sp = p->kstack + PGSIZE;
-
+    p->ctime = get_ticks();
     return p;
 }
 
@@ -164,6 +174,13 @@ freeproc(struct proc* p)
     p->killed = 0;
     p->xstate = 0;
     p->state = UNUSED;
+    p->tracemask = 0;
+    p->ctime = 0; 
+    p->ttime = 0;
+    p->stime = 0; 
+    p->retime = 0; 
+    p->rutime = 0; 
+    p->bursttime = 0;
 }
 
 // Create a user page table for a given process,
@@ -334,6 +351,7 @@ void reparent(struct proc* p)
     }
 }
 
+
 // Exit the current process.  Does not return.
 // An exited process remains in the zombie state
 // until its parent calls wait().
@@ -368,6 +386,7 @@ void exit(int status)
 
     acquire(&p->lock);
 
+	p->ttime = get_ticks();
     p->xstate = status;
     p->state = ZOMBIE;
 
@@ -405,6 +424,63 @@ int wait(uint64 addr)
                         release(&wait_lock);
                         return -1;
                     }
+                    freeproc(np);
+                    release(&np->lock);
+                    release(&wait_lock);
+                    return pid;
+                }
+                release(&np->lock);
+            }
+        }
+
+        // No point waiting if we don't have any children.
+        if (!havekids || p->killed) {
+            release(&wait_lock);
+            return -1;
+        }
+
+        // Wait for a child to exit.
+        sleep(p, &wait_lock); //DOC: wait-sleep
+    }
+}
+
+int wait_stat(uint64 addr, uint64 perf)
+{
+    struct proc* np;
+    int havekids, pid;
+    struct proc* p = myproc();
+
+    acquire(&wait_lock);
+
+    for (;;) {
+        // Scan through table looking for exited children.
+        havekids = 0;
+        for (np = proc; np < &proc[NPROC]; np++) {
+            if (np->parent == p) {
+                // make sure the child isn't still in exit() or swtch().
+                acquire(&np->lock);
+
+                havekids = 1;
+                if (np->state == ZOMBIE) {
+                    // Found one.
+                    pid = np->pid;
+					struct perf perf_struct;
+                    perf_struct.ctime = np->ctime;
+                    perf_struct.stime = np->stime;
+                    perf_struct.retime = np->retime;
+                    perf_struct.rutime = np->rutime;
+                    float a = np->bursttime;
+					printf("%f", a);
+                    perf_struct.ttime = np->ttime;
+                    if ((addr != 0 && copyout(p->pagetable, addr, (char*)&np->xstate, sizeof(np->xstate)) < 0)
+                        || (perf != 0 && copyout(p->pagetable, perf, (char*)&perf_struct, sizeof(perf_struct)))) {
+
+                        release(&np->lock);
+                        release(&wait_lock);
+                        return -1;
+                    }
+
+					printf("perf stime was: %d\n", perf_struct.stime);
                     freeproc(np);
                     release(&np->lock);
                     release(&wait_lock);
@@ -536,15 +612,36 @@ void sleep(void* chan, struct spinlock* lk)
     // Go to sleep.
     p->chan = chan;
     p->state = SLEEPING;
-
+	int pre_tick = get_ticks();
     sched();
-
+	p->stime += get_ticks() - pre_tick;
+	printf("stime: %d\n", p->stime);
     // Tidy up.
     p->chan = 0;
 
     // Reacquire original lock.
     release(&p->lock);
     acquire(lk);
+}
+
+void update_proc_ticks()
+{
+    struct proc* p;
+
+    for (p = proc; p < &proc[NPROC]; p++) {
+        switch (p->state)
+        {
+            case RUNNABLE:
+				p->retime++;
+                break;
+
+            case RUNNING:
+                p->rutime++;
+            
+            default:
+                break;
+        }
+    }
 }
 
 // Wake up all processes sleeping on chan.
@@ -560,7 +657,7 @@ void wakeup(void* chan)
                 p->state = RUNNABLE;
             }
             release(&p->lock);
-        }
+        } 
     }
 }
 
