@@ -19,6 +19,11 @@ struct spinlock pid_lock;
 
 extern void forkret(void);
 static void freeproc(struct proc* p);
+void default_scheduler_policy(struct cpu*);
+void fcfs_scheduler_policy(struct cpu*);
+void srt_scheduler_policy(struct cpu*);
+void cfsd_scheduler_policy(struct cpu*);
+
 
 extern char trampoline[]; // trampoline.S
 
@@ -46,10 +51,8 @@ void proc_mapstacks(pagetable_t kpgtbl)
 
 uint get_ticks()
 {
-    acquire(&tickslock);
     int curr_ticks = ticks;
-	printf("curr_ticks: %d\n", curr_ticks);
-    release(&tickslock);
+	//printf("curr_ticks: %d\n", curr_ticks);
     return curr_ticks;
 }
 
@@ -469,8 +472,8 @@ int wait_stat(uint64 addr, uint64 perf)
                     perf_struct.stime = np->stime;
                     perf_struct.retime = np->retime;
                     perf_struct.rutime = np->rutime;
-                    float a = np->bursttime;
-					printf("%f", a);
+                    // float a = np->bursttime;
+					// printf("%f", a);
                     perf_struct.ttime = np->ttime;
                     if ((addr != 0 && copyout(p->pagetable, addr, (char*)&np->xstate, sizeof(np->xstate)) < 0)
                         || (perf != 0 && copyout(p->pagetable, perf, (char*)&perf_struct, sizeof(perf_struct)))) {
@@ -479,8 +482,6 @@ int wait_stat(uint64 addr, uint64 perf)
                         release(&wait_lock);
                         return -1;
                     }
-
-					printf("perf stime was: %d\n", perf_struct.stime);
                     freeproc(np);
                     release(&np->lock);
                     release(&wait_lock);
@@ -510,15 +511,28 @@ int wait_stat(uint64 addr, uint64 perf)
 //    via swtch back to the scheduler.
 void scheduler(void)
 {
-    struct proc* p;
     struct cpu* c = mycpu();
 
     c->proc = 0;
     for (;;) {
         // Avoid deadlock by ensuring that devices can interrupt.
         intr_on();
+        #ifdef DEFAULT
+        default_scheduler_policy(c);
+        #elif FCFS
+        fcfs_scheduler_policy(c);
+        #elif SRT
+        srt_scheduler_policy(c);
+        #elif CFSD
+        cfsd_scheduler_policy(c);
+        #endif
+    }
+}
 
-        for (p = proc; p < &proc[NPROC]; p++) {
+void default_scheduler_policy(struct cpu* c)
+{
+    struct proc* p;
+    for (p = proc; p < &proc[NPROC]; p++) {
             acquire(&p->lock);
             if (p->state == RUNNABLE) {
                 // Switch to chosen process.  It is the process's job
@@ -533,9 +547,71 @@ void scheduler(void)
                 c->proc = 0;
             }
             release(&p->lock);
-        }
     }
 }
+
+struct proc* first_runnable()
+{
+    struct proc* found = 0;
+    struct proc* p;
+    for (p = proc; p < &proc[NPROC] && !found; p++) {
+        acquire(&p->lock);
+        if (p->state == RUNNABLE){
+            found = p;
+        }
+        release(&p->lock);
+    }
+    return found;
+}
+
+void fcfs_scheduler_policy(struct cpu* c)
+{
+    // struct proc* p_min_ct = first_runnable();
+
+    // if(!p_min_ct) return;
+
+    // struct proc* p;
+
+    // for (p = p_min_ct; p < &proc[NPROC]; p++) {
+    //     acquire(&p->lock);
+    //     if (p->ctime < p_min_ct->ctime){
+    //         p_min_ct = p;
+    //     }
+    //     release(&p->lock);
+    // }
+    // acquire(&p_min_ct->lock);
+    // p_min_ct->state = RUNNING;
+    // c->proc = p_min_ct;
+    // printf("%d",p_min_ct->state);
+    // swtch(&c->context, &p_min_ct->context);
+    // c->proc = 0;
+    // release(&p_min_ct->lock);
+    struct proc* p_min_ct = 0;
+    struct proc *p = 0;
+    for(p = proc; p < &proc[NPROC]; p++){
+      acquire(&p->lock);
+      // must runable
+      if(p->state != RUNNABLE)
+        continue;
+
+      // find the first come process
+      if(p_min_ct == 0){
+        p_min_ct = p;
+      }else if(p->ctime < p_min_ct->ctime){
+        p_min_ct = p;
+      }
+      release(&p->lock);
+    }
+    acquire(&p_min_ct->lock);
+    p_min_ct->state = RUNNING;
+    c->proc = p_min_ct;
+    printf("%d",p_min_ct->state);
+    swtch(&c->context, &p_min_ct->context);
+    c->proc = 0;
+    release(&p_min_ct->lock);
+}
+
+
 
 // Switch to scheduler.  Must hold only p->lock
 // and have changed proc->state. Saves and restores
@@ -615,7 +691,6 @@ void sleep(void* chan, struct spinlock* lk)
 	int pre_tick = get_ticks();
     sched();
 	p->stime += get_ticks() - pre_tick;
-	printf("stime: %d\n", p->stime);
     // Tidy up.
     p->chan = 0;
 

@@ -10,8 +10,11 @@ int main(int argc, char* argv[])
     int pid;
     pid = fork();
     if(pid == 0){
-        fprintf(2, "in child process\n");
-        sleep(10);
+        for (int i = 0; i < 100; i++)
+        {
+            fprintf(2, "in child process\n");
+        }
+        sleep(5);
     }
     else{
         fprintf(2, "in father process with pid: %d\n", f_pid);
