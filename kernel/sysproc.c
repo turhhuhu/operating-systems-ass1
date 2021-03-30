@@ -110,13 +110,13 @@ sys_uptime(void)
     return xticks;
 }
 
-void
+int
 sys_trace(void)
 {
 	int mask;
 	int pid;
 	
 	if (argint(0, &mask) < 0 || argint(1, &pid) < 0)
-        return;
-	trace(mask, pid);
+        return -1;
+	return trace(mask, pid);
 }

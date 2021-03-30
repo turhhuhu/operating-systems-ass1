@@ -105,7 +105,8 @@ struct proc {
     int stime; // total sleeping time
     int retime; // total ready time
     int rutime; // total running time
-    float bursttime; // approximate estimated burst time
+    int average_bursttime; // approximate estimated burst time
+    int running_tick; // the last clock tick the process started running
 
     // proc_tree_lock must be held when using this:
     struct proc* parent; // Parent process

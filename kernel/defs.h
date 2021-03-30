@@ -106,7 +106,7 @@ void            yield(void);
 int             either_copyout(int user_dst, uint64 dst, void *src, uint64 len);
 int             either_copyin(void *dst, int user_src, uint64 src, uint64 len);
 void            procdump(void);
-void            trace(int, int);
+int             trace(int, int);
 int             wait_stat(uint64, uint64);
 
 // swtch.S
@@ -148,6 +148,7 @@ extern uint     ticks;
 void            trapinit(void);
 void            trapinithart(void);
 extern struct spinlock tickslock;
+extern struct spinlock read_tickslock;
 void            usertrapret(void);
 
 // uart.c

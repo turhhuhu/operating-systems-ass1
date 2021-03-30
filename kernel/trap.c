@@ -7,6 +7,7 @@
 #include "defs.h"
 
 struct spinlock tickslock;
+struct spinlock read_tickslock;
 uint ticks;
 
 extern char trampoline[], uservec[], userret[];
@@ -19,6 +20,7 @@ extern int devintr();
 void trapinit(void)
 {
     initlock(&tickslock, "time");
+    initlock(&read_tickslock, "time-read");
 }
 
 // set up to take exceptions and traps while in the kernel.
@@ -74,8 +76,13 @@ void usertrap(void)
         exit(-1);
 
     // give up the CPU if this is a timer interrupt.
-    if (which_dev == 2)
+    #ifndef FCFS
+    int current_ticks = ticks;
+    if (which_dev == 2 && current_ticks%QUANTUM == 0){
         yield();
+    }
+    #endif
+    
 
     usertrapret();
 }
@@ -144,9 +151,16 @@ void kerneltrap()
         panic("kerneltrap");
     }
 
+
+    #ifndef FCFS
+    int current_ticks = ticks;
     // give up the CPU if this is a timer interrupt.
-    if (which_dev == 2 && myproc() != 0 && myproc()->state == RUNNING)
+    if (which_dev == 2 && myproc() != 0 && myproc()->state == RUNNING && current_ticks%QUANTUM == 0){
         yield();
+    }
+    #endif
+
+
 
     // the yield() may have caused some traps to occur,
     // so restore trap registers for use by kernelvec.S's sepc instruction.

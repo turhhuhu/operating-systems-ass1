@@ -51,8 +51,10 @@ void proc_mapstacks(pagetable_t kpgtbl)
 
 uint get_ticks()
 {
+    acquire(&read_tickslock);
     int curr_ticks = ticks;
 	//printf("curr_ticks: %d\n", curr_ticks);
+    release(&read_tickslock);
     return curr_ticks;
 }
 
@@ -147,13 +149,13 @@ found:
         release(&p->lock);
         return 0;
     }
-
     // Set up new context to start executing at forkret,
     // which returns to user space.
     memset(&p->context, 0, sizeof(p->context));
     p->context.ra = (uint64)forkret;
     p->context.sp = p->kstack + PGSIZE;
     p->ctime = get_ticks();
+    p->average_bursttime = QUANTUM*100;
     return p;
 }
 
@@ -183,7 +185,7 @@ freeproc(struct proc* p)
     p->stime = 0; 
     p->retime = 0; 
     p->rutime = 0; 
-    p->bursttime = 0;
+    p->average_bursttime = 0;
 }
 
 // Create a user page table for a given process,
@@ -472,8 +474,7 @@ int wait_stat(uint64 addr, uint64 perf)
                     perf_struct.stime = np->stime;
                     perf_struct.retime = np->retime;
                     perf_struct.rutime = np->rutime;
-                    // float a = np->bursttime;
-					// printf("%f", a);
+                    perf_struct.average_bursttime = np->average_bursttime;				
                     perf_struct.ttime = np->ttime;
                     if ((addr != 0 && copyout(p->pagetable, addr, (char*)&np->xstate, sizeof(np->xstate)) < 0)
                         || (perf != 0 && copyout(p->pagetable, perf, (char*)&perf_struct, sizeof(perf_struct)))) {
@@ -502,6 +503,13 @@ int wait_stat(uint64 addr, uint64 perf)
     }
 }
 
+void update_proc_bursttime(struct proc* p){
+    int curr_ticks = get_ticks();
+    int curr_burst_time = curr_ticks - p->running_tick;
+    int average_burst_time_approx = ALPHA * curr_burst_time + ((100 - ALPHA) * p->average_bursttime) / 100;
+    printf("average burst time of proc %d is: %d\n",p->pid, average_burst_time_approx);
+    p->average_bursttime = average_burst_time_approx;
+}
 // Per-CPU process scheduler.
 // Each CPU calls scheduler() after setting itself up.
 // Scheduler never returns.  It loops, doing:
@@ -564,51 +572,60 @@ struct proc* first_runnable()
     return found;
 }
 
+void switch_proc_to_running(struct cpu* c, struct proc* p)
+{
+    acquire(&p->lock);
+    p->state = RUNNING;
+    p->running_tick = get_ticks();
+    c->proc = p;
+    swtch(&c->context, &p->context);
+    c->proc = 0;
+    release(&p->lock);
+}
+
 void fcfs_scheduler_policy(struct cpu* c)
 {
-    // struct proc* p_min_ct = first_runnable();
+    struct proc* p_min_ct = first_runnable();
 
-    // if(!p_min_ct) return;
-
-    // struct proc* p;
-
-    // for (p = p_min_ct; p < &proc[NPROC]; p++) {
-    //     acquire(&p->lock);
-    //     if (p->ctime < p_min_ct->ctime){
-    //         p_min_ct = p;
-    //     }
-    //     release(&p->lock);
-    // }
-    // acquire(&p_min_ct->lock);
-    // p_min_ct->state = RUNNING;
-    // c->proc = p_min_ct;
-    // printf("%d",p_min_ct->state);
-    // swtch(&c->context, &p_min_ct->context);
-    // c->proc = 0;
-    // release(&p_min_ct->lock);
-    struct proc* p_min_ct = 0;
-    struct proc *p = 0;
-    for(p = proc; p < &proc[NPROC]; p++){
-      acquire(&p->lock);
-      // must runable
-      if(p->state != RUNNABLE)
-        continue;
-
-      // find the first come process
-      if(p_min_ct == 0){
-        p_min_ct = p;
-      }else if(p->ctime < p_min_ct->ctime){
-        p_min_ct = p;
-      }
-      release(&p->lock);
+    if(!p_min_ct){
+        return;
     }
-    acquire(&p_min_ct->lock);
-    p_min_ct->state = RUNNING;
-    c->proc = p_min_ct;
-    printf("%d",p_min_ct->state);
-    swtch(&c->context, &p_min_ct->context);
-    c->proc = 0;
-    release(&p_min_ct->lock);
+
+    struct proc* p;
+
+    for (p = p_min_ct; p < &proc[NPROC]; p++) {
+        
+        acquire(&p->lock);
+        if (p->pid > 1 && p->state == RUNNABLE){
+            if (p->ctime < p_min_ct->ctime){
+                p_min_ct = p;
+            }
+        }
+        release(&p->lock);
+    }
+    switch_proc_to_running(c, p_min_ct);
+}
+
+
+
+void srt_scheduler_policy(struct cpu* c)
+{
+    struct proc* p_min_bt = first_runnable();
+    if(!p_min_bt){
+        return;
+    }
+
+    struct proc* p;
+    for (p = p_min_bt; p < &proc[NPROC]; p++) {
+        acquire(&p->lock);
+        if (p->pid > 1 && p->state == RUNNABLE){
+            if (p->average_bursttime < p_min_bt->average_bursttime){
+                p_min_bt = p;
+            }
+        }
+        release(&p->lock);
+    }
+    switch_proc_to_running(c,p_min_bt);
 }
 
 
@@ -633,7 +650,8 @@ void sched(void)
         panic("sched running");
     if (intr_get())
         panic("sched interruptible");
-
+    if (p->state != SLEEPING)
+        update_proc_bursttime(p);
     intena = mycpu()->intena;
     swtch(&p->context, &mycpu()->context);
     mycpu()->intena = intena;
@@ -759,7 +777,7 @@ int kill(int pid)
     return -1;
 }
 
-void trace(int mask, int pid)
+int trace(int mask, int pid)
 {
     struct proc* p;
     for (p = proc; p < &proc[NPROC]; p++) {
@@ -769,6 +787,7 @@ void trace(int mask, int pid)
         }
 		release(&p -> lock);
     }
+    return 0;
 }
 
 // Copy to either a user address, or kernel address,
