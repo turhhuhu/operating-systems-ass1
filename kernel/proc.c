@@ -563,18 +563,45 @@ struct proc* first_runnable()
     struct proc* found = 0;
     struct proc* p;
     for (p = proc; p < &proc[NPROC] && !found; p++) {
-        acquire(&p->lock);
         if (p->state == RUNNABLE){
             found = p;
         }
-        release(&p->lock);
     }
     return found;
 }
 
+void acquire_all_proc()
+{
+    struct proc* p;
+    for (p = proc; p < &proc[NPROC]; p++) {
+        if(p != 0 && !holding(&p->lock)){
+            acquire(&p->lock);
+        }
+    }
+}
+
+void release_all_proc_but(struct proc* p_to_not_release)
+{
+    struct proc* p;
+    for (p = proc; p < &proc[NPROC]; p++) {
+        if(p != 0 && holding(&p->lock) && p->pid != p_to_not_release->pid){
+            release(&p->lock);
+        }
+    }
+}
+
+void release_all_proc()
+{
+    struct proc* p;
+    for (p = proc; p < &proc[NPROC]; p++) {
+        if(p != 0 && holding(&p->lock)){
+            release(&p->lock);
+        }
+    }
+}
+
 void switch_proc_to_running(struct cpu* c, struct proc* p)
 {
-    acquire(&p->lock);
     p->state = RUNNING;
     p->running_tick = get_ticks();
     c->proc = p;
@@ -585,9 +612,11 @@ void switch_proc_to_running(struct cpu* c, struct proc* p)
 
 void fcfs_scheduler_policy(struct cpu* c)
 {
+    acquire_all_proc();
     struct proc* p_min_ct = first_runnable();
-
+    
     if(!p_min_ct){
+        release_all_proc();
         return;
     }
 
@@ -595,14 +624,13 @@ void fcfs_scheduler_policy(struct cpu* c)
 
     for (p = p_min_ct; p < &proc[NPROC]; p++) {
         
-        acquire(&p->lock);
-        if (p->pid > 1 && p->state == RUNNABLE){
+        if (p->pid > 1 && p_min_ct->state == RUNNABLE){
             if (p->ctime < p_min_ct->ctime){
                 p_min_ct = p;
             }
         }
-        release(&p->lock);
     }
+    release_all_proc_but(p_min_ct);
     switch_proc_to_running(c, p_min_ct);
 }
 
@@ -610,22 +638,23 @@ void fcfs_scheduler_policy(struct cpu* c)
 
 void srt_scheduler_policy(struct cpu* c)
 {
+    acquire_all_proc();
     struct proc* p_min_bt = first_runnable();
     if(!p_min_bt){
+        release_all_proc();
         return;
     }
 
     struct proc* p;
     for (p = p_min_bt; p < &proc[NPROC]; p++) {
-        acquire(&p->lock);
         if (p->pid > 1 && p->state == RUNNABLE){
             if (p->average_bursttime < p_min_bt->average_bursttime){
                 p_min_bt = p;
             }
         }
-        release(&p->lock);
     }
-    switch_proc_to_running(c,p_min_bt);
+    release_all_proc_but(p_min_bt);
+    switch_proc_to_running(c, p_min_bt);
 }
 
 
