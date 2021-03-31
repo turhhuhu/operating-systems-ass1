@@ -11,18 +11,8 @@ int main(int argc, char* argv[])
     int pid;
     pid = fork();
     if(pid == 0){
-        for (int i = 0; i < 100000; i++)
-        {
-            a++;
-        }
-        
-        sleep(8);
-
-        for (int i = 0; i < 50; i++)
-        {
-            a++;
-        }
-        sleep(3);
+        int res = set_priority(5);
+        printf("res was: %d\n", res);
     }
     else{
         fprintf(2, "in father process with pid: %d\n", f_pid);

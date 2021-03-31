@@ -23,7 +23,12 @@ void default_scheduler_policy(struct cpu*);
 void fcfs_scheduler_policy(struct cpu*);
 void srt_scheduler_policy(struct cpu*);
 void cfsd_scheduler_policy(struct cpu*);
-
+void update_proc_bursttime(struct proc*);
+void switch_proc_to_running(struct cpu*, struct proc*);
+void base_scheduler_policy(struct cpu*, int (*)(struct proc*, struct proc*));
+int fcfs_policy_pred(struct proc*, struct proc*);
+int srt_policy_pred(struct proc*, struct proc*);
+int cfsd_policy_pred(struct proc*, struct proc*);
 
 extern char trampoline[]; // trampoline.S
 
@@ -260,7 +265,7 @@ void userinit(void)
     // prepare for the very first "return" from kernel to user.
     p->trapframe->epc = 0; // user program counter
     p->trapframe->sp = PGSIZE; // user stack pointer
-
+    p->priority = NORMAL_PRIORITY;
     safestrcpy(p->name, "initcode", sizeof(p->name));
     p->cwd = namei("/");
 
@@ -287,6 +292,23 @@ int growproc(int n)
     p->sz = sz;
     return 0;
 }
+static enum procpriority priority_to_decay[] = {
+    [TEST_HIGH_PRIORITY] TEST_HIGH_DECAY,
+    [HIGH_PRIORITY] HIGH_DECAY,
+    [NORMAL_PRIORITY] NORMAL_DECAY,
+    [LOW_PRIORITY] LOW_DECAY,
+    [TEST_LOW_PRIORITY] TEST_LOW_DECAY
+};
+
+int set_priority(int priority)
+{
+    struct proc* p = myproc();
+    acquire(&p->lock);
+    p->priority = priority;
+    release(&p->lock);
+    return 0;
+}
+
 
 // Create a new process, copying the parent.
 // Sets up child kernel stack to return as if from fork() system call.
@@ -312,8 +334,12 @@ int fork(void)
     // copy saved user registers.
     *(np->trapframe) = *(p->trapframe);
 
-    // copy tracemase
-    np -> tracemask = p -> tracemask;
+    // copy tracemask
+    np->tracemask = p->tracemask;
+
+    // copy priority
+    
+    np->priority = p->priority;
 
     // Cause fork to return 0 in the child.
     np->trapframe->a0 = 0;
@@ -394,7 +420,7 @@ void exit(int status)
 	p->ttime = get_ticks();
     p->xstate = status;
     p->state = ZOMBIE;
-
+    update_proc_bursttime(p);
     release(&wait_lock);
 
     // Jump into the scheduler, never to return.
@@ -506,8 +532,9 @@ int wait_stat(uint64 addr, uint64 perf)
 void update_proc_bursttime(struct proc* p){
     int curr_ticks = get_ticks();
     int curr_burst_time = curr_ticks - p->running_tick;
+    //printf("cuurent burst time of proc %d is: %d\n",p->pid, curr_burst_time);
     int average_burst_time_approx = ALPHA * curr_burst_time + ((100 - ALPHA) * p->average_bursttime) / 100;
-    printf("average burst time of proc %d is: %d\n",p->pid, average_burst_time_approx);
+    //printf("average burst time of proc %d is: %d\n",p->pid, average_burst_time_approx);
     p->average_bursttime = average_burst_time_approx;
 }
 // Per-CPU process scheduler.
@@ -543,16 +570,7 @@ void default_scheduler_policy(struct cpu* c)
     for (p = proc; p < &proc[NPROC]; p++) {
             acquire(&p->lock);
             if (p->state == RUNNABLE) {
-                // Switch to chosen process.  It is the process's job
-                // to release its lock and then reacquire it
-                // before jumping back to us.
-                p->state = RUNNING;
-                c->proc = p;
-                swtch(&c->context, &p->context);
-
-                // Process is done running for now.
-                // It should have changed its p->state before coming back.
-                c->proc = 0;
+                switch_proc_to_running(c, p);
             }
             release(&p->lock);
     }
@@ -607,54 +625,65 @@ void switch_proc_to_running(struct cpu* c, struct proc* p)
     c->proc = p;
     swtch(&c->context, &p->context);
     c->proc = 0;
-    release(&p->lock);
+}
+
+int fcfs_policy_pred(struct proc* p1, struct proc* p2)
+{
+    return p1->ctime < p2->ctime;
 }
 
 void fcfs_scheduler_policy(struct cpu* c)
 {
-    acquire_all_proc();
-    struct proc* p_min_ct = first_runnable();
-    
-    if(!p_min_ct){
-        release_all_proc();
-        return;
-    }
+    base_scheduler_policy(c, fcfs_policy_pred);
+}
 
-    struct proc* p;
+int srt_policy_pred(struct proc* p1, struct proc* p2)
+{
+    return p1->average_bursttime < p2->average_bursttime;
+}
 
-    for (p = p_min_ct; p < &proc[NPROC]; p++) {
-        
-        if (p->pid > 1 && p_min_ct->state == RUNNABLE){
-            if (p->ctime < p_min_ct->ctime){
-                p_min_ct = p;
-            }
-        }
-    }
-    release_all_proc_but(p_min_ct);
-    switch_proc_to_running(c, p_min_ct);
+void srt_scheduler_policy(struct cpu* c)
+{
+    base_scheduler_policy(c, fcfs_policy_pred);
 }
 
 
 
-void srt_scheduler_policy(struct cpu* c)
+int get_rtime_ratio(struct proc* p)
+{
+    return (p->rutime * priority_to_decay[p->priority])/(p->rutime + p->stime);
+}
+
+int cfsd_policy_pred(struct proc* p1, struct proc* p2)
+{
+    return get_rtime_ratio(p1) < get_rtime_ratio(p2);
+}
+
+void cfsd_scheduler_policy(struct cpu* c)
+{
+    base_scheduler_policy(c, cfsd_policy_pred);
+}
+
+void base_scheduler_policy(struct cpu* c, int (*pred)(struct proc*, struct proc*))
 {
     acquire_all_proc();
-    struct proc* p_min_bt = first_runnable();
-    if(!p_min_bt){
+    struct proc* p_min = first_runnable();
+    if(!p_min){
         release_all_proc();
         return;
     }
 
     struct proc* p;
-    for (p = p_min_bt; p < &proc[NPROC]; p++) {
-        if (p->pid > 1 && p->state == RUNNABLE){
-            if (p->average_bursttime < p_min_bt->average_bursttime){
-                p_min_bt = p;
+    for (p = p_min; p < &proc[NPROC]; p++) {
+        if (p->state == RUNNABLE){
+            if (pred(p, p_min)){
+                p_min = p;
             }
         }
     }
-    release_all_proc_but(p_min_bt);
-    switch_proc_to_running(c, p_min_bt);
+    release_all_proc_but(p_min);
+    switch_proc_to_running(c, p_min);
+    release(&p_min->lock);
 }
 
 
@@ -679,8 +708,6 @@ void sched(void)
         panic("sched running");
     if (intr_get())
         panic("sched interruptible");
-    if (p->state != SLEEPING)
-        update_proc_bursttime(p);
     intena = mycpu()->intena;
     swtch(&p->context, &mycpu()->context);
     mycpu()->intena = intena;
@@ -692,6 +719,7 @@ void yield(void)
     struct proc* p = myproc();
     acquire(&p->lock);
     p->state = RUNNABLE;
+    update_proc_bursttime(p);
     sched();
     release(&p->lock);
 }
@@ -735,6 +763,7 @@ void sleep(void* chan, struct spinlock* lk)
     // Go to sleep.
     p->chan = chan;
     p->state = SLEEPING;
+    update_proc_bursttime(p);
 	int pre_tick = get_ticks();
     sched();
 	p->stime += get_ticks() - pre_tick;

@@ -89,10 +89,27 @@ enum procstate { UNUSED,
     RUNNING,
     ZOMBIE };
 
+enum procpriority {
+    TEST_HIGH_PRIORITY = 1,
+    HIGH_PRIORITY = 2,
+    NORMAL_PRIORITY = 3,
+    LOW_PRIORITY = 4,
+    TEST_LOW_PRIORITY = 5
+};
+
+enum procdecayfactor {
+    TEST_HIGH_DECAY = 1,
+    HIGH_DECAY = 3,
+    NORMAL_DECAY = 5,
+    LOW_DECAY = 7,
+    TEST_LOW_DECAY = 25
+};
+
+
 // Per-process state
 struct proc {
     struct spinlock lock;
-
+    enum procpriority priority;
     // p->lock must be held when using these:
     enum procstate state; // Process state
     void* chan; // If non-zero, sleeping on chan
