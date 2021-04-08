@@ -124,6 +124,7 @@ struct proc {
     int rutime; // total running time
     int average_bursttime; // approximate estimated burst time
     int running_tick; // the last clock tick the process started running
+    int fcfs_queue_placing;
 
     // proc_tree_lock must be held when using this:
     struct proc* parent; // Parent process

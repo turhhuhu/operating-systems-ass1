@@ -161,6 +161,7 @@ found:
     p->context.sp = p->kstack + PGSIZE;
     p->ctime = get_ticks();
     p->average_bursttime = QUANTUM*100;
+    p->fcfs_queue_placing = get_ticks();
     return p;
 }
 
@@ -363,6 +364,7 @@ int fork(void)
 
     acquire(&np->lock);
     np->state = RUNNABLE;
+    np->fcfs_queue_placing = get_ticks();
     release(&np->lock);
 
     return pid;
@@ -629,7 +631,7 @@ void switch_proc_to_running(struct cpu* c, struct proc* p)
 
 int fcfs_policy_pred(struct proc* p1, struct proc* p2)
 {
-    return p1->ctime < p2->ctime;
+    return p1->fcfs_queue_placing < p2->fcfs_queue_placing;
 }
 
 void fcfs_scheduler_policy(struct cpu* c)
@@ -651,6 +653,11 @@ void srt_scheduler_policy(struct cpu* c)
 
 int get_rtime_ratio(struct proc* p)
 {
+    int run_plus_sleep = p->rutime + p->stime;
+    if(run_plus_sleep == 0)
+    {
+        return 0;
+    }
     return (p->rutime * priority_to_decay[p->priority])/(p->rutime + p->stime);
 }
 
@@ -719,6 +726,7 @@ void yield(void)
     struct proc* p = myproc();
     acquire(&p->lock);
     p->state = RUNNABLE;
+    p->fcfs_queue_placing = get_ticks();
     update_proc_bursttime(p);
     sched();
     release(&p->lock);
@@ -806,6 +814,7 @@ void wakeup(void* chan)
             acquire(&p->lock);
             if (p->state == SLEEPING && p->chan == chan) {
                 p->state = RUNNABLE;
+                p->fcfs_queue_placing = get_ticks();
             }
             release(&p->lock);
         } 
@@ -826,6 +835,7 @@ int kill(int pid)
             if (p->state == SLEEPING) {
                 // Wake process from sleep().
                 p->state = RUNNABLE;
+                p->fcfs_queue_placing = get_ticks();
             }
             release(&p->lock);
             return 0;
